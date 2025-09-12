@@ -1,0 +1,22 @@
+# VS Code
+.vscode/
+
+# macOS
+.DS_Store
+
+# Linux
+*.swp
+
+# Node.js
+node_modules/
+npm-debug.log*
+
+# General
+*.bak
+*.tmp
+*.orig
+
+# Environment variables
+.env
+.env.*
+
