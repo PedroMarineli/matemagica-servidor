@@ -5,6 +5,8 @@ var logger = require('morgan');
 
 var usersRouter = require('./routes/users');
 var classroomsRouter = require('./routes/classrooms');
+var tasksRouter = require('./routes/tasks');
+var taskProgressRouter = require('./routes/task_progress');
 
 var app = express();
 
@@ -16,6 +18,8 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 app.use('/users', usersRouter);
 app.use('/classrooms', classroomsRouter);
+app.use('/tasks', tasksRouter);
+app.use('/progress', taskProgressRouter);
 
 app.listen(3000);
   console.log('Express started on port 3000');
