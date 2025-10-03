@@ -2,24 +2,37 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 
-// Rota para obter o progresso de todas as tarefas de um aluno específico
+// Rota para obter o progresso de todas as tarefas de um aluno específico (RF06)
 router.get('/student/:student_id', async (req, res) => {
     const { student_id } = req.params;
+    const { status } = req.query; // Permite filtrar por status (pending/completed)
+    
     try {
-        // Junta task_progress com tasks para obter detalhes da tarefa
-        const result = await db.query(
-            `SELECT 
+        let query = `SELECT 
                 tp.task_id, 
                 t.title, 
                 t.type, 
+                t.content,
+                t.difficulty,
                 tp.status, 
                 tp.score, 
                 tp.completion_date 
              FROM task_progress tp
              JOIN tasks t ON tp.task_id = t.id
-             WHERE tp.student_id = $1`,
-            [student_id]
-        );
+             WHERE tp.student_id = $1`;
+        
+        const params = [student_id];
+        
+        // RF06: Filtrar tarefas pendentes ou concluídas
+        if (status === 'pending') {
+            query += ` AND tp.status IN ('Not Started', 'In Progress')`;
+        } else if (status === 'completed') {
+            query += ` AND tp.status IN ('Submitted', 'Graded')`;
+        }
+        
+        query += ' ORDER BY t.created_at DESC';
+        
+        const result = await db.query(query, params);
         res.status(200).json(result.rows);
     } catch (err) {
         console.error(err);
@@ -49,6 +62,72 @@ router.get('/task/:task_id', async (req, res) => {
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: 'Erro ao buscar o progresso da tarefa.' });
+    }
+});
+
+// Rota para dashboard do professor - estatísticas de desempenho (RF07)
+router.get('/teacher/:teacher_id/dashboard', async (req, res) => {
+    const { teacher_id } = req.params;
+    const { classroom_id } = req.query;
+    
+    try {
+        // Verifica se o professor existe
+        const teacherCheck = await db.query('SELECT id FROM users WHERE id = $1 AND type = $2', [teacher_id, 'teacher']);
+        if (teacherCheck.rows.length === 0) {
+            return res.status(404).json({ error: 'Professor não encontrado.' });
+        }
+        
+        // Query base para estatísticas
+        let classroomFilter = '';
+        let params = [teacher_id];
+        
+        if (classroom_id) {
+            classroomFilter = ' AND c.id = $2';
+            params.push(classroom_id);
+        }
+        
+        // Estatísticas gerais
+        const stats = await db.query(
+            `SELECT 
+                COUNT(DISTINCT u.id) as total_students,
+                COUNT(DISTINCT c.id) as total_classrooms,
+                COUNT(DISTINCT t.id) as total_tasks,
+                COUNT(CASE WHEN tp.status IN ('Submitted', 'Graded') THEN 1 END) as completed_tasks,
+                COUNT(CASE WHEN tp.status IN ('Not Started', 'In Progress') THEN 1 END) as pending_tasks,
+                ROUND(AVG(CASE WHEN tp.score IS NOT NULL THEN tp.score END), 2) as average_score
+             FROM classroom c
+             LEFT JOIN users u ON u.classroom_id = c.id AND u.type = 'student'
+             LEFT JOIN tasks t ON t.classroom_id = c.id
+             LEFT JOIN task_progress tp ON tp.student_id = u.id AND tp.task_id = t.id
+             WHERE c.teacher_id = $1${classroomFilter}`,
+            params
+        );
+        
+        // Desempenho por aluno
+        const studentPerformance = await db.query(
+            `SELECT 
+                u.id as student_id,
+                u.username,
+                c.name as classroom_name,
+                COUNT(tp.task_id) as total_tasks_assigned,
+                COUNT(CASE WHEN tp.status IN ('Submitted', 'Graded') THEN 1 END) as tasks_completed,
+                ROUND(AVG(CASE WHEN tp.score IS NOT NULL THEN tp.score END), 2) as average_score
+             FROM classroom c
+             JOIN users u ON u.classroom_id = c.id AND u.type = 'student'
+             LEFT JOIN task_progress tp ON tp.student_id = u.id
+             WHERE c.teacher_id = $1${classroomFilter}
+             GROUP BY u.id, u.username, c.name
+             ORDER BY average_score DESC NULLS LAST`,
+            params
+        );
+        
+        res.status(200).json({
+            statistics: stats.rows[0],
+            student_performance: studentPerformance.rows
+        });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Erro ao buscar dashboard do professor.' });
     }
 });
 
