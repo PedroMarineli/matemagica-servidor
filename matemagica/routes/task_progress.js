@@ -16,7 +16,8 @@ router.get('/student/:student_id', async (req, res) => {
                 t.difficulty,
                 tp.status, 
                 tp.score, 
-                tp.completion_date 
+                tp.completion_date,
+                tp.number_of_attempts
              FROM task_progress tp
              JOIN tasks t ON tp.task_id = t.id
              WHERE tp.student_id = $1`;

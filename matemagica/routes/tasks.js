@@ -4,7 +4,7 @@ const db = require('../db');
 
 // Rota para criar uma nova tarefa (RF05)
 router.post('/', async (req, res) => {
-    const { title, type, content, difficulty, classroom_id, teacher_id } = req.body;
+    const { title, type, content, difficulty, classroom_id, teacher_id, answer } = req.body;
 
     if (!title || !type || !classroom_id || !teacher_id) {
         return res.status(400).json({ error: 'Todos os campos são obrigatórios: título, tipo, ID da sala e ID do professor.' });
@@ -23,8 +23,8 @@ router.post('/', async (req, res) => {
         }
 
         const result = await db.query(
-            'INSERT INTO tasks (title, type, content, difficulty, classroom_id, teacher_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
-            [title, type, content, difficulty, classroom_id, teacher_id]
+            'INSERT INTO tasks (title, type, content, difficulty, classroom_id, teacher_id, answer) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *',
+            [title, type, content, difficulty, classroom_id, teacher_id, answer]
         );
 
         // Opcional: Automaticamente criar entradas 'task_progress' para todos os alunos da turma
@@ -81,9 +81,9 @@ router.get('/:id', async (req, res) => {
 // Rota para atualizar uma tarefa (RF05)
 router.put('/:id', async (req, res) => {
     const { id } = req.params;
-    const { title, type, content, difficulty } = req.body;
+    const { title, type, content, difficulty, answer } = req.body;
 
-    if (!title && !type && !content && !difficulty) {
+    if (!title && !type && !content && !difficulty && !answer) {
         return res.status(400).json({ error: 'Nenhum dado fornecido para atualização.' });
     }
 
@@ -98,10 +98,11 @@ router.put('/:id', async (req, res) => {
         const newType = type !== undefined ? type : currentTask.type;
         const newContent = content !== undefined ? content : currentTask.content;
         const newDifficulty = difficulty !== undefined ? difficulty : currentTask.difficulty;
+        const newAnswer = answer !== undefined ? answer : currentTask.answer;
 
         const result = await db.query(
-            'UPDATE tasks SET title = $1, type = $2, content = $3, difficulty = $4 WHERE id = $5 RETURNING *',
-            [newTitle, newType, newContent, newDifficulty, id]
+            'UPDATE tasks SET title = $1, type = $2, content = $3, difficulty = $4, answer = $5 WHERE id = $6 RETURNING *',
+            [newTitle, newType, newContent, newDifficulty, newAnswer, id]
         );
 
         res.status(200).json(result.rows[0]);
