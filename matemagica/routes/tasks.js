@@ -4,14 +4,14 @@ const db = require('../db');
 
 // Rota para criar uma nova tarefa (RF05)
 router.post('/', async (req, res) => {
-    const { title, type, content, difficulty, classroom_id, teacher_id, answer } = req.body;
+    let { title, type, content, difficulty, classroom_id, teacher_id, answer } = req.body;
 
     if (!title || !type || !classroom_id || !teacher_id) {
         return res.status(400).json({ error: 'Todos os campos são obrigatórios: título, tipo, ID da sala e ID do professor.' });
     }
 
     try {
-        // Validações (opcional, mas recomendado)
+        // Validações
         const teacherCheck = await db.query('SELECT id FROM users WHERE id = $1 AND type = $2', [teacher_id, 'teacher']);
         if (teacherCheck.rows.length === 0) {
             return res.status(404).json({ error: 'Professor não encontrado ou o usuário não é um professor.' });
@@ -20,6 +20,14 @@ router.post('/', async (req, res) => {
         const classroomCheck = await db.query('SELECT id FROM classroom WHERE id = $1', [classroom_id]);
         if (classroomCheck.rows.length === 0) {
             return res.status(404).json({ error: 'Sala de aula não encontrada.' });
+        }
+
+        // Garante que o conteúdo e a resposta sejam armazenados como JSON se forem arrays
+        if (Array.isArray(content)) {
+            content = JSON.stringify(content);
+        }
+        if (Array.isArray(answer)) {
+            answer = JSON.stringify(answer);
         }
 
         const result = await db.query(
@@ -81,7 +89,7 @@ router.get('/:id', async (req, res) => {
 // Rota para atualizar uma tarefa (RF05)
 router.put('/:id', async (req, res) => {
     const { id } = req.params;
-    const { title, type, content, difficulty, answer } = req.body;
+    let { title, type, content, difficulty, answer } = req.body;
 
     if (!title && !type && !content && !difficulty && !answer) {
         return res.status(400).json({ error: 'Nenhum dado fornecido para atualização.' });
@@ -96,9 +104,17 @@ router.put('/:id', async (req, res) => {
         const currentTask = taskCheck.rows[0];
         const newTitle = title !== undefined ? title : currentTask.title;
         const newType = type !== undefined ? type : currentTask.type;
-        const newContent = content !== undefined ? content : currentTask.content;
+        let newContent = content !== undefined ? content : currentTask.content;
         const newDifficulty = difficulty !== undefined ? difficulty : currentTask.difficulty;
-        const newAnswer = answer !== undefined ? answer : currentTask.answer;
+        let newAnswer = answer !== undefined ? answer : currentTask.answer;
+
+        // Garante que o conteúdo e a resposta sejam armazenados como JSON se forem arrays
+        if (Array.isArray(newContent)) {
+            newContent = JSON.stringify(newContent);
+        }
+        if (Array.isArray(newAnswer)) {
+            newAnswer = JSON.stringify(newAnswer);
+        }
 
         const result = await db.query(
             'UPDATE tasks SET title = $1, type = $2, content = $3, difficulty = $4, answer = $5 WHERE id = $6 RETURNING *',
