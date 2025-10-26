@@ -4,6 +4,8 @@ var router = express.Router();
 const db = require('../db'); // Importa a configuração do banco de dados
 const multer = require('multer');
 const path = require('path');
+const bcrypt = require('bcrypt');
+const saltRounds = 10; // Fator de custo para o bcrypt
 
 // Configuração do Multer para upload de fotos de alunos
 const storage = multer.diskStorage({
@@ -30,6 +32,10 @@ router.get('/', async function(req, res, next) {
         const photoPath = user.photo_path.replace(/\\/g, '/').replace('public/', '');
         user.photo_path = `${req.protocol}://${req.get('host')}/${photoPath}`;
       }
+      if (user.cartoon_image_path) {
+        const cartoonPath = user.cartoon_image_path.replace(/\\/g, '/').replace('public/', '');
+        user.cartoon_image_path = `${req.protocol}://${req.get('host')}/${cartoonPath}`;
+      }
       return user;
     });
     res.json(users);
@@ -50,6 +56,10 @@ router.get('/:id', async function(req, res, next) {
         // Remove 'public' do caminho para que a URL seja relativa à raiz do servidor web
         const photoPath = user.photo_path.replace(/\\/g, '/').replace('public/', '');
         user.photo_path = `${req.protocol}://${req.get('host')}/${photoPath}`;
+      }
+      if (user.cartoon_image_path) {
+        const cartoonPath = user.cartoon_image_path.replace(/\\/g, '/').replace('public/', '');
+        user.cartoon_image_path = `${req.protocol}://${req.get('host')}/${cartoonPath}`;
       }
       res.json(user);
     } else {
@@ -93,10 +103,12 @@ router.post('/register/teacher', async function(req, res, next) {
   }
   
   try {
-    // É altamente recomendável que você faça o hash da senha antes de salvar
+    // Gera o hash da senha
+    const hashedPassword = await bcrypt.hash(password, saltRounds);
+    
     const result = await db.query(
       'INSERT INTO users (username, email, password, type) VALUES ($1, $2, $3, $4) RETURNING *',
-      [username, email, password, 'teacher']
+      [username, email, hashedPassword, 'teacher']
     );
     // Remove a senha do objeto de resposta por segurança
     delete result.rows[0].password;
@@ -147,10 +159,13 @@ router.post('/register/student', upload.single('photo'), async function(req, res
       }
     }
     
+    // Gera o hash da senha
+    const hashedPassword = await bcrypt.hash(password, saltRounds);
+
     // Cria o aluno, salvando o caminho do arquivo da foto e da versão cartoon
     const result = await db.query(
       'INSERT INTO users (username, password, type, classroom_id, photo_path, cartoon_image_path) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
-      [username, password, 'student', classroom_id, photo_path, cartoon_image_path]
+      [username, hashedPassword, 'student', classroom_id, photo_path, cartoon_image_path]
     );
     
     // Remove a senha do objeto de resposta por segurança
@@ -187,13 +202,15 @@ router.post('/login', async function(req, res, next) {
         );
         if (result.rows.length > 0) {
             const user = result.rows[0];
-            // ATENÇÃO: Esta comparação de senha não é segura! Use bcrypt.
-            if (password === user.password) {
-                // Em vez de uma mensagem simples, retorne os dados do usuário.
-                // É crucial remover a senha do objeto antes de enviá-lo.
-                delete user.password;
-                res.json({ message: `Usuário ${user.username} autenticado com sucesso.`, user: user });
+            // Compara a senha fornecida com o hash salvo no banco
+            const match = await bcrypt.compare(password, user.password);
+
+            if (match) {
+                // Senha correta. Retorna os dados do usuário.
+                delete user.password; // Crucial remover a senha
+                res.json(user);
             } else {
+                // Senha incorreta
                 res.status(401).send('Credenciais inválidas.');
             }
         } else {
@@ -208,7 +225,7 @@ router.post('/login', async function(req, res, next) {
 /* PUT: Atualizar um usuário existente pelo ID. */
 router.put('/:id', upload.single('photo'), async (req, res, next) => {
   const { id } = req.params;
-  const { username, email, password, type, classroom_id, avatar_url } = req.body;
+  let { username, email, password, type, classroom_id, avatar_url } = req.body;
   const photo_path = req.file ? req.file.path.replace(/\\/g, '/') : undefined;
 
   try {
@@ -227,6 +244,11 @@ router.put('/:id', upload.single('photo'), async (req, res, next) => {
       } catch (cartoonError) {
         console.error("Could not cartoonize image on update, proceeding without it.", cartoonError);
       }
+    }
+
+    // Se uma nova senha foi fornecida, gera o hash dela
+    if (password) {
+      password = await bcrypt.hash(password, saltRounds);
     }
 
     // Constrói a query de atualização dinamicamente

@@ -79,7 +79,22 @@ router.get('/:id', async (req, res) => {
         if (result.rows.length === 0) {
             return res.status(404).json({ error: 'Tarefa não encontrada.' });
         }
-        res.status(200).json(result.rows[0]);
+        
+        const task = result.rows[0];
+
+        // Analisa o campo de conteúdo para converter a string JSON em um objeto
+        if (task.content && typeof task.content === 'string') {
+            try {
+                task.problems = JSON.parse(task.content);
+                delete task.content; // Remove o campo original para evitar redundância
+            } catch (e) {
+                console.error("Erro ao analisar o conteúdo da tarefa:", e);
+                // Opcional: decidir como lidar com JSON inválido. 
+                // Por enquanto, apenas registra o erro e envia como está.
+            }
+        }
+
+        res.status(200).json(task);
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: 'Erro ao buscar a tarefa.' });
