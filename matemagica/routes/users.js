@@ -1,3 +1,4 @@
+const { cartoonizeImage } = require('../services/cartoonizer');
 var express = require('express');
 var router = express.Router();
 const db = require('../db'); // Importa a configuração do banco de dados
@@ -133,11 +134,23 @@ router.post('/register/student', upload.single('photo'), async function(req, res
         return res.status(404).json({ error: 'Sala de aula não encontrada.' });
       }
     }
+
+    let cartoon_image_path = null;
+    if (photo_path) {
+      try {
+        // Gera a versão cartoon da imagem
+        const fullImagePath = path.join(__dirname, '..', photo_path);
+        cartoon_image_path = await cartoonizeImage(fullImagePath);
+      } catch (cartoonError) {
+        console.error("Could not cartoonize image, proceeding without it.", cartoonError);
+        // Decide como lidar com a falha: talvez registrá-la e continuar sem uma imagem em cartoon
+      }
+    }
     
-    // Cria o aluno, salvando o caminho do arquivo da foto
+    // Cria o aluno, salvando o caminho do arquivo da foto e da versão cartoon
     const result = await db.query(
-      'INSERT INTO users (username, password, type, classroom_id, photo_path) VALUES ($1, $2, $3, $4, $5) RETURNING *',
-      [username, password, 'student', classroom_id, photo_path]
+      'INSERT INTO users (username, password, type, classroom_id, photo_path, cartoon_image_path) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+      [username, password, 'student', classroom_id, photo_path, cartoon_image_path]
     );
     
     // Remove a senha do objeto de resposta por segurança
@@ -199,41 +212,56 @@ router.put('/:id', upload.single('photo'), async (req, res, next) => {
   const photo_path = req.file ? req.file.path.replace(/\\/g, '/') : undefined;
 
   try {
-    // Busca o usuário atual para fazer update parcial
-    const currentUser = await db.query('SELECT * FROM users WHERE id = $1', [id]);
+    // Busca o usuário atual para obter o photo_path antigo, se necessário
+    const currentUser = await db.query('SELECT photo_path FROM users WHERE id = $1', [id]);
     if (currentUser.rows.length === 0) {
-      return res.status(404).send('Usuário não encontrado para atualização.');
+      return res.status(404).send('Usuário não encontrado.');
     }
-    
-    const user = currentUser.rows[0];
-    
-    // Se uma nova foto for enviada, photo_path terá um valor.
-    // Se não, usamos o valor existente (user.photo_path).
-    // Se o campo for explicitamente definido como nulo no corpo, ele será limpo.
-    const final_photo_path = photo_path !== undefined ? photo_path : (req.body.photo_path !== undefined ? req.body.photo_path : user.photo_path);
 
-    const result = await db.query(
-      'UPDATE users SET username = $1, email = $2, password = $3, type = $4, classroom_id = $5, photo_path = $6, avatar_url = $7 WHERE id = $8 RETURNING *',
-      [
-        username !== undefined ? username : user.username,
-        email !== undefined ? email : user.email,
-        password !== undefined ? password : user.password,
-        type !== undefined ? type : user.type,
-        classroom_id !== undefined ? classroom_id : user.classroom_id,
-        final_photo_path,
-        avatar_url !== undefined ? avatar_url : user.avatar_url,
-        id
-      ]
-    );
-    
-    // Remove a senha do objeto de resposta por segurança
-    delete result.rows[0].password;
-    res.json(result.rows[0]);
+    let cartoon_image_path = undefined;
+    if (photo_path) {
+      try {
+        // Gera a versão cartoon da nova imagem
+        const fullImagePath = path.join(__dirname, '..', photo_path);
+        cartoon_image_path = await cartoonizeImage(fullImagePath);
+      } catch (cartoonError) {
+        console.error("Could not cartoonize image on update, proceeding without it.", cartoonError);
+      }
+    }
+
+    // Constrói a query de atualização dinamicamente
+    const fields = { username, email, password, type, classroom_id, photo_path, avatar_url, cartoon_image_path };
+    const updates = [];
+    const values = [];
+    let queryIndex = 1;
+
+    for (const key in fields) {
+      if (fields[key] !== undefined) {
+        updates.push(`${key} = $${queryIndex}`);
+        values.push(fields[key]);
+        queryIndex++;
+      }
+    }
+
+    if (updates.length === 0) {
+      return res.status(400).send('Nenhum campo para atualizar.');
+    }
+
+    values.push(id);
+    const query = `UPDATE users SET ${updates.join(', ')} WHERE id = $${queryIndex} RETURNING *`;
+
+    const result = await db.query(query, values);
+
+    if (result.rows.length > 0) {
+      // Remove a senha do objeto de resposta por segurança
+      delete result.rows[0].password;
+      res.json(result.rows[0]);
+    } else {
+      // Este caso é improvável se a verificação inicial for bem-sucedida, mas é bom ter
+      res.status(404).send('Usuário não encontrado para atualização.');
+    }
   } catch (err) {
     console.error(err);
-    if (err.code === '23503') { // Código de erro do PostgreSQL para violação de FK
-        return res.status(400).json({ error: 'A classroom_id fornecida não existe.' });
-    }
     res.status(500).send('Erro ao atualizar usuário.');
   }
 });
