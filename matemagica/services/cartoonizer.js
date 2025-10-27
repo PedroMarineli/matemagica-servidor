@@ -1,11 +1,14 @@
-const { GoogleGenerativeAI } = require("@google/generative-ai");
-const fs = require("fs");
-const path = require("path");
+// Importa os pacotes usando a sintaxe de Módulo ES (import)
+import { GoogleGenAI } from "@google/genai";
+import * as fs from "node:fs";
+import * as path from "node:path";
 
 // Inicializa o GenAI com a chave da API do ambiente
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+// O novo SDK também aceita a chave diretamente no construtor
+const genAI = new GoogleGenAI(process.env.GEMINI_API_KEY);
 
 // Função para converter arquivo em parte generativa
+// Esta função permanece a mesma, pois o formato do objeto é compatível
 function fileToGenerativePart(filePath, mimeType) {
   return {
     inlineData: {
@@ -22,17 +25,23 @@ async function cartoonizeImage(imagePath) {
   }
   
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-image" });
-
     const prompt = "Transforme esta foto de um estudante em um desenho estilo cartoon, mantendo as características da pessoa. Retorne apenas a imagem, sem texto adicional.";
 
     const imageMimeType = "image/png"; // Assumindo PNG, pode ser dinâmico se necessário
     const imagePart = fileToGenerativePart(imagePath, imageMimeType);
 
-    const result = await model.generateContent([prompt, imagePart]);
-    
-    // Assumindo que a API retorna a imagem como a primeira parte
-    const responsePart = result.response.candidates[0].content.parts[0];
+    // --- MUDANÇA PRINCIPAL AQUI ---
+    // Chamada direta ao modelo usando a nova sintaxe do SDK
+    const result = await genAI.models.generateContent({
+      model: "gemini-2.5-flash-image",
+      contents: [ { text: prompt }, imagePart ], // O 'contents' é um array de partes
+    });
+    // --- FIM DA MUDANÇA ---
+
+    // Acessa a resposta (sem o .response)
+    // Usamos .find() para garantir que estamos pegando a parte da imagem,
+    // o que é um pouco mais robusto do que apenas pegar parts[0]
+    const responsePart = result.candidates[0].content.parts.find(part => part.inlineData);
 
     if (responsePart && responsePart.inlineData) {
       const imageData = responsePart.inlineData.data;
@@ -59,4 +68,5 @@ async function cartoonizeImage(imagePath) {
   }
 }
 
-module.exports = { cartoonizeImage };
+// Usa 'export' (ES Modules) em vez de 'module.exports'
+export { cartoonizeImage };
