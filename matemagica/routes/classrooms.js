@@ -1,23 +1,19 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
+const { authenticateToken, authorizeRole } = require('../middleware/auth');
 
-// Rota para criar uma nova sala de aula
-router.post('/', async (req, res) => {
-    const { name, description, teacher_id } = req.body;
+// Rota para criar uma nova sala de aula (apenas para professores)
+router.post('/', authenticateToken, authorizeRole('teacher'), async (req, res) => {
+    const { name, description } = req.body;
+    const teacher_id = req.user.id; // ID do professor vem do token
 
     // Validação básica
-    if (!name || !teacher_id) {
-        return res.status(400).json({ error: 'Nome e ID do professor são obrigatórios.' });
+    if (!name) {
+        return res.status(400).json({ error: 'O nome da sala de aula é obrigatório.' });
     }
 
     try {
-        // Verifica se o professor (usuário) existe e é um professor
-        const teacherCheck = await db.query('SELECT * FROM users WHERE id = $1 AND type = $2', [teacher_id, 'teacher']);
-        if (teacherCheck.rows.length === 0) {
-            return res.status(404).json({ error: 'Professor não encontrado ou o usuário não é um professor.' });
-        }
-
         const result = await db.query(
             'INSERT INTO classroom (name, description, teacher_id) VALUES ($1, $2, $3) RETURNING *',
             [name, description, teacher_id]
@@ -29,8 +25,8 @@ router.post('/', async (req, res) => {
     }
 });
 
-// Rota para obter todas as salas de aula
-router.get('/', async (req, res) => {
+// Rota para obter todas as salas de aula (acessível a todos os usuários autenticados)
+router.get('/', authenticateToken, async (req, res) => {
     try {
         const result = await db.query('SELECT * FROM classroom');
         res.status(200).json(result.rows);
@@ -40,8 +36,8 @@ router.get('/', async (req, res) => {
     }
 });
 
-// Rota para obter uma sala de aula específica pelo ID
-router.get('/:id', async (req, res) => {
+// Rota para obter uma sala de aula específica pelo ID (acessível a todos os usuários autenticados)
+router.get('/:id', authenticateToken, async (req, res) => {
     const { id } = req.params;
     try {
         const result = await db.query('SELECT * FROM classroom WHERE id = $1', [id]);
@@ -55,38 +51,30 @@ router.get('/:id', async (req, res) => {
     }
 });
 
-// Rota para atualizar uma sala de aula
-router.put('/:id', async (req, res) => {
+// Rota para atualizar uma sala de aula (apenas para o professor responsável)
+router.put('/:id', authenticateToken, authorizeRole('teacher'), async (req, res) => {
     const { id } = req.params;
-    const { name, description, teacher_id } = req.body;
+    const { name, description } = req.body;
+    const teacher_id = req.user.id;
 
-    if (!name && !description && !teacher_id) {
+    if (!name && !description) {
         return res.status(400).json({ error: 'Nenhum dado fornecido para atualização.' });
     }
 
     try {
-        // Verifica se a sala de aula existe
-        const classroomCheck = await db.query('SELECT * FROM classroom WHERE id = $1', [id]);
+        // Verifica se a sala de aula existe e se pertence ao professor que está fazendo a requisição
+        const classroomCheck = await db.query('SELECT * FROM classroom WHERE id = $1 AND teacher_id = $2', [id, teacher_id]);
         if (classroomCheck.rows.length === 0) {
-            return res.status(404).json({ error: 'Sala de aula não encontrada.' });
-        }
-
-        // Se o teacher_id for fornecido, verifica se o professor existe e é do tipo 'teacher'
-        if (teacher_id) {
-            const teacherCheck = await db.query('SELECT * FROM users WHERE id = $1 AND type = $2', [teacher_id, 'teacher']);
-            if (teacherCheck.rows.length === 0) {
-                return res.status(404).json({ error: 'Professor não encontrado ou o usuário não é um professor.' });
-            }
+            return res.status(404).json({ error: 'Sala de aula não encontrada ou você não tem permissão para atualizá-la.' });
         }
 
         const currentClassroom = classroomCheck.rows[0];
         const newName = name || currentClassroom.name;
         const newDescription = description || currentClassroom.description;
-        const newTeacherId = teacher_id || currentClassroom.teacher_id;
 
         const result = await db.query(
-            'UPDATE classroom SET name = $1, description = $2, teacher_id = $3 WHERE id = $4 RETURNING *',
-            [newName, newDescription, newTeacherId, id]
+            'UPDATE classroom SET name = $1, description = $2 WHERE id = $3 RETURNING *',
+            [newName, newDescription, id]
         );
 
         res.status(200).json(result.rows[0]);
@@ -96,8 +84,8 @@ router.put('/:id', async (req, res) => {
     }
 });
 
-// Rota para deletar uma sala de aula
-router.delete('/:id', async (req, res) => {
+// Rota para deletar uma sala de aula (apenas para o professor responsável)
+router.delete('/:id', authenticateToken, authorizeRole('teacher'), async (req, res) => {
     const { id } = req.params;
     try {
         // Opcional: Antes de deletar a sala, você pode querer desassociar todos os alunos.

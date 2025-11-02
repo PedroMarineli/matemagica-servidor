@@ -1,12 +1,19 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
+const { authenticateToken, authorizeRole } = require('../middleware/auth');
+const progressService = require('../services/progressService');
 
-// Rota para obter o progresso de todas as tarefas de um aluno específico (RF06)
-router.get('/student/:student_id', async (req, res) => {
+// Rota para obter o progresso de todas as tarefas de um aluno específico (RF06) - Apenas o próprio aluno pode ver
+router.get('/student/:student_id', authenticateToken, async (req, res) => {
     const { student_id } = req.params;
     const { status } = req.query; // Permite filtrar por status (pending/completed)
     
+    // Garante que o usuário autenticado só possa acessar seu próprio progresso
+    if (req.user.id !== parseInt(student_id) && req.user.role !== 'teacher') {
+        return res.status(403).json({ error: 'Você não tem permissão para acessar este recurso.' });
+    }
+
     try {
         let query = `SELECT 
                 tp.task_id, 
@@ -41,8 +48,8 @@ router.get('/student/:student_id', async (req, res) => {
     }
 });
 
-// Rota para obter o progresso de todos os alunos em uma tarefa específica
-router.get('/task/:task_id', async (req, res) => {
+// Rota para obter o progresso de todos os alunos em uma tarefa específica - Apenas para professores
+router.get('/task/:task_id', authenticateToken, authorizeRole('teacher'), async (req, res) => {
     const { task_id } = req.params;
     try {
         // Junta task_progress com users para obter detalhes do aluno
@@ -66,114 +73,190 @@ router.get('/task/:task_id', async (req, res) => {
     }
 });
 
-// Rota para dashboard do professor - estatísticas de desempenho (RF07)
-router.get('/teacher/:teacher_id/dashboard', async (req, res) => {
-    const { teacher_id } = req.params;
+// Rota para dashboard do professor - estatísticas de desempenho (RF07) - Apenas para professores
+router.get('/teacher/dashboard', authenticateToken, authorizeRole('teacher'), async (req, res) => {
+    const teacher_id = req.user.id;
     const { classroom_id } = req.query;
     
     try {
-        // Verifica se o professor existe
-        const teacherCheck = await db.query('SELECT id FROM users WHERE id = $1 AND type = $2', [teacher_id, 'teacher']);
-        if (teacherCheck.rows.length === 0) {
-            return res.status(404).json({ error: 'Professor não encontrado.' });
-        }
-        
-        // Query base para estatísticas
-        let classroomFilter = '';
-        let params = [teacher_id];
-        
-        if (classroom_id) {
-            classroomFilter = ' AND c.id = $2';
-            params.push(classroom_id);
-        }
-        
-        // Estatísticas gerais
-        const stats = await db.query(
-            `SELECT 
-                COUNT(DISTINCT u.id) as total_students,
-                COUNT(DISTINCT c.id) as total_classrooms,
-                COUNT(DISTINCT t.id) as total_tasks,
-                COUNT(CASE WHEN tp.status IN ('Submitted', 'Graded') THEN 1 END) as completed_tasks,
-                COUNT(CASE WHEN tp.status IN ('Not Started', 'In Progress') THEN 1 END) as pending_tasks,
-                ROUND(AVG(CASE WHEN tp.score IS NOT NULL THEN tp.score END), 2) as average_score
-             FROM classroom c
-             LEFT JOIN users u ON u.classroom_id = c.id AND u.type = 'student'
-             LEFT JOIN tasks t ON t.classroom_id = c.id
-             LEFT JOIN task_progress tp ON tp.student_id = u.id AND tp.task_id = t.id
-             WHERE c.teacher_id = $1${classroomFilter}`,
-            params
-        );
-        
-        // Desempenho por aluno
-        const studentPerformance = await db.query(
-            `SELECT 
-                u.id as student_id,
-                u.username,
-                c.name as classroom_name,
-                COUNT(tp.task_id) as total_tasks_assigned,
-                COUNT(CASE WHEN tp.status IN ('Submitted', 'Graded') THEN 1 END) as tasks_completed,
-                ROUND(AVG(CASE WHEN tp.score IS NOT NULL THEN tp.score END), 2) as average_score
-             FROM classroom c
-             JOIN users u ON u.classroom_id = c.id AND u.type = 'student'
-             LEFT JOIN task_progress tp ON tp.student_id = u.id
-             WHERE c.teacher_id = $1${classroomFilter}
-             GROUP BY u.id, u.username, c.name
-             ORDER BY average_score DESC NULLS LAST`,
-            params
-        );
-        
-        res.status(200).json({
-            statistics: stats.rows[0],
-            student_performance: studentPerformance.rows
-        });
+        const dashboardData = await progressService.getTeacherDashboard(teacher_id, classroom_id);
+        res.status(200).json(dashboardData);
     } catch (err) {
         console.error(err);
-        res.status(500).json({ error: 'Erro ao buscar dashboard do professor.' });
+        res.status(500).json({ error: 'Erro ao buscar os dados do dashboard.' });
     }
 });
 
-// Rota para um aluno submeter/atualizar o progresso em uma tarefa
-router.put('/update', async (req, res) => {
-    const { student_id, task_id, status, score } = req.body;
+// Rota para um aluno submeter uma tarefa (RF08)
+router.post('/submit', authenticateToken, async (req, res) => {
+    const { task_id, answers } = req.body;
+    const student_id = req.user.id;
 
-    if (!student_id || !task_id) {
-        return res.status(400).json({ error: 'student_id e task_id são obrigatórios.' });
-    }
-    if (!status && score === undefined) {
-        return res.status(400).json({ error: 'É necessário fornecer um status ou uma pontuação.' });
+    if (!task_id || answers === undefined) {
+        return res.status(400).json({ error: 'ID da tarefa e respostas são obrigatórios.' });
     }
 
     try {
+        // Verifica se o progresso da tarefa existe para este aluno
         const progressCheck = await db.query(
             'SELECT * FROM task_progress WHERE student_id = $1 AND task_id = $2',
             [student_id, task_id]
         );
 
         if (progressCheck.rows.length === 0) {
-            return res.status(404).json({ error: 'Registro de progresso não encontrado. O aluno ou tarefa podem não existir ou não estarem associados.' });
+            return res.status(404).json({ error: 'Tarefa não atribuída a este aluno.' });
         }
 
-        const currentProgress = progressCheck.rows[0];
-        const newStatus = status || currentProgress.status;
-        // Permite que a pontuação seja 0
-        const newScore = score !== undefined ? score : currentProgress.score;
-        // Define a data de conclusão se o status for 'Submitted' ou 'Graded' e não houver uma data
-        const newCompletionDate = (newStatus === 'Submitted' || newStatus === 'Graded') && !currentProgress.completion_date
-            ? new Date()
-            : currentProgress.completion_date;
+        // Busca a tarefa para obter a resposta correta
+        const taskResult = await db.query('SELECT answer, type FROM tasks WHERE id = $1', [task_id]);
+        if (taskResult.rows.length === 0) {
+            return res.status(404).json({ error: 'Tarefa não encontrada.' });
+        }
 
-        const result = await db.query(
+        const correctAnswer = taskResult.rows[0].answer;
+        const taskType = taskResult.rows[0].type;
+        let score = 0;
+
+        // Lógica de correção automática
+        if (taskType === 'multiple_choice' || taskType === 'fill_in_the_blanks') {
+            const correct = JSON.parse(correctAnswer);
+            const submitted = Array.isArray(answers) ? answers : [answers];
+            let correctCount = 0;
+            for (let i = 0; i < correct.length; i++) {
+                if (String(correct[i]).toLowerCase() === String(submitted[i]).toLowerCase()) {
+                    correctCount++;
+                }
+            }
+            score = (correctCount / correct.length) * 100;
+        } else {
+            // Para tipos de resposta aberta, a pontuação pode ser definida manualmente mais tarde
+            score = null; // ou 0, dependendo da regra de negócio
+        }
+
+        // Atualiza o progresso da tarefa
+        const updateResult = await db.query(
             `UPDATE task_progress 
-             SET status = $1, score = $2, completion_date = $3 
-             WHERE student_id = $4 AND task_id = $5 
+             SET status = 'Submitted', 
+                 answers = $1, 
+                 score = $2, 
+                 completion_date = NOW(), 
+                 number_of_attempts = number_of_attempts + 1
+             WHERE student_id = $3 AND task_id = $4
              RETURNING *`,
-            [newStatus, newScore, newCompletionDate, student_id, task_id]
+            [JSON.stringify(answers), score, student_id, task_id]
         );
 
-        res.status(200).json(result.rows[0]);
+        res.status(200).json(updateResult.rows[0]);
     } catch (err) {
         console.error(err);
-        res.status(500).json({ error: 'Erro ao atualizar o progresso da tarefa.' });
+        res.status(500).json({ error: 'Erro ao submeter a tarefa.' });
+    }
+});
+
+module.exports = router;
+
+// Rota para obter o progresso de todos os alunos em uma tarefa específica - Apenas para professores
+router.get('/task/:task_id', authenticateToken, authorizeRole('teacher'), async (req, res) => {
+    const { task_id } = req.params;
+    try {
+        // Junta task_progress com users para obter detalhes do aluno
+        const result = await db.query(
+            `SELECT 
+                tp.student_id, 
+                u.username, 
+                u.email, 
+                tp.status, 
+                tp.score, 
+                tp.completion_date 
+             FROM task_progress tp
+             JOIN users u ON tp.student_id = u.id
+             WHERE tp.task_id = $1`,
+            [task_id]
+        );
+        res.status(200).json(result.rows);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Erro ao buscar o progresso da tarefa.' });
+    }
+});
+
+// Rota para dashboard do professor - estatísticas de desempenho (RF07) - Apenas para professores
+router.get('/teacher/dashboard', authenticateToken, authorizeRole('teacher'), async (req, res) => {
+    const teacher_id = req.user.id;
+    const { classroom_id } = req.query;
+    
+    try {
+        const dashboardData = await progressService.getTeacherDashboard(teacher_id, classroom_id);
+        res.status(200).json(dashboardData);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Erro ao buscar os dados do dashboard.' });
+    }
+});
+
+// Rota para um aluno submeter uma tarefa (RF08)
+router.post('/submit', authenticateToken, async (req, res) => {
+    const { task_id, answers } = req.body;
+    const student_id = req.user.id;
+
+    if (!task_id || answers === undefined) {
+        return res.status(400).json({ error: 'ID da tarefa e respostas são obrigatórios.' });
+    }
+
+    try {
+        // Verifica se o progresso da tarefa existe para este aluno
+        const progressCheck = await db.query(
+            'SELECT * FROM task_progress WHERE student_id = $1 AND task_id = $2',
+            [student_id, task_id]
+        );
+
+        if (progressCheck.rows.length === 0) {
+            return res.status(404).json({ error: 'Tarefa não atribuída a este aluno.' });
+        }
+
+        // Busca a tarefa para obter a resposta correta
+        const taskResult = await db.query('SELECT answer, type FROM tasks WHERE id = $1', [task_id]);
+        if (taskResult.rows.length === 0) {
+            return res.status(404).json({ error: 'Tarefa não encontrada.' });
+        }
+
+        const correctAnswer = taskResult.rows[0].answer;
+        const taskType = taskResult.rows[0].type;
+        let score = 0;
+
+        // Lógica de correção automática
+        if (taskType === 'multiple_choice' || taskType === 'fill_in_the_blanks') {
+            const correct = JSON.parse(correctAnswer);
+            const submitted = Array.isArray(answers) ? answers : [answers];
+            let correctCount = 0;
+            for (let i = 0; i < correct.length; i++) {
+                if (String(correct[i]).toLowerCase() === String(submitted[i]).toLowerCase()) {
+                    correctCount++;
+                }
+            }
+            score = (correctCount / correct.length) * 100;
+        } else {
+            // Para tipos de resposta aberta, a pontuação pode ser definida manualmente mais tarde
+            score = null; // ou 0, dependendo da regra de negócio
+        }
+
+        // Atualiza o progresso da tarefa
+        const updateResult = await db.query(
+            `UPDATE task_progress 
+             SET status = 'Submitted', 
+                 answers = $1, 
+                 score = $2, 
+                 completion_date = NOW(), 
+                 number_of_attempts = number_of_attempts + 1
+             WHERE student_id = $3 AND task_id = $4
+             RETURNING *`,
+            [JSON.stringify(answers), score, student_id, task_id]
+        );
+
+        res.status(200).json(updateResult.rows[0]);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Erro ao submeter a tarefa.' });
     }
 });
 

@@ -1,25 +1,26 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
+const { authenticateToken, authorizeRole } = require('../middleware/auth');
 
-// Rota para criar uma nova tarefa (RF05)
-router.post('/', async (req, res) => {
-    let { title, type, content, difficulty, classroom_id, teacher_id, answer } = req.body;
+// Rota para criar uma nova tarefa (RF05) - Apenas para professores
+router.post('/', authenticateToken, authorizeRole('teacher'), async (req, res) => {
+    let { title, type, content, difficulty, classroom_id, answer } = req.body;
+    const teacher_id = req.user.id; // ID do professor vem do token
 
-    if (!title || !type || !classroom_id || !teacher_id) {
-        return res.status(400).json({ error: 'Todos os campos são obrigatórios: título, tipo, ID da sala e ID do professor.' });
+    if (!title || !type || !classroom_id) {
+        return res.status(400).json({ error: 'Todos os campos são obrigatórios: título, tipo e ID da sala.' });
     }
 
-    try {
-        // Validações
-        const teacherCheck = await db.query('SELECT id FROM users WHERE id = $1 AND type = $2', [teacher_id, 'teacher']);
-        if (teacherCheck.rows.length === 0) {
-            return res.status(404).json({ error: 'Professor não encontrado ou o usuário não é um professor.' });
-        }
+    const client = await db.connect(); // Pega um cliente do pool
 
-        const classroomCheck = await db.query('SELECT id FROM classroom WHERE id = $1', [classroom_id]);
+    try {
+        await client.query('BEGIN'); // Inicia a transação
+
+        // Validações
+        const classroomCheck = await client.query('SELECT id FROM classroom WHERE id = $1 AND teacher_id = $2', [classroom_id, teacher_id]);
         if (classroomCheck.rows.length === 0) {
-            return res.status(404).json({ error: 'Sala de aula não encontrada.' });
+            throw new Error('Sala de aula não encontrada ou não pertence a este professor.');
         }
 
         // Garante que o conteúdo e a resposta sejam armazenados como JSON se forem arrays
@@ -30,31 +31,39 @@ router.post('/', async (req, res) => {
             answer = JSON.stringify(answer);
         }
 
-        const result = await db.query(
+        const taskResult = await client.query(
             'INSERT INTO tasks (title, type, content, difficulty, classroom_id, teacher_id, answer) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *',
             [title, type, content, difficulty, classroom_id, teacher_id, answer]
         );
+        const newTaskId = taskResult.rows[0].id;
 
-        // Opcional: Automaticamente criar entradas 'task_progress' para todos os alunos da turma
-        const students = await db.query('SELECT id FROM users WHERE classroom_id = $1 AND type = $2', [classroom_id, 'student']);
-        const newTaskId = result.rows[0].id;
-
+        // Automaticamente criar entradas 'task_progress' para todos os alunos da turma
+        const students = await client.query('SELECT id FROM users WHERE classroom_id = $1 AND type = $2', [classroom_id, 'student']);
+        
         for (const student of students.rows) {
-            await db.query(
+            await client.query(
                 'INSERT INTO task_progress (student_id, task_id) VALUES ($1, $2)',
                 [student.id, newTaskId]
             );
         }
 
-        res.status(201).json(result.rows[0]);
+        await client.query('COMMIT'); // Confirma a transação
+        res.status(201).json(taskResult.rows[0]);
+
     } catch (err) {
+        await client.query('ROLLBACK'); // Desfaz a transação em caso de erro
         console.error(err);
+        if (err.message.includes('Sala de aula não encontrada')) {
+            return res.status(404).json({ error: err.message });
+        }
         res.status(500).json({ error: 'Erro ao criar a tarefa.' });
+    } finally {
+        client.release(); // Libera o cliente de volta para o pool
     }
 });
 
-// Rota para obter todas as tarefas (pode ser filtrado por classroom_id)
-router.get('/', async (req, res) => {
+// Rota para obter todas as tarefas (pode ser filtrado por classroom_id) - Acessível a todos os usuários autenticados
+router.get('/', authenticateToken, async (req, res) => {
     const { classroom_id } = req.query;
     try {
         let query = 'SELECT * FROM tasks';
@@ -71,8 +80,8 @@ router.get('/', async (req, res) => {
     }
 });
 
-// Rota para obter uma tarefa específica pelo ID
-router.get('/:id', async (req, res) => {
+// Rota para obter uma tarefa específica pelo ID - Acessível a todos os usuários autenticados
+router.get('/:id', authenticateToken, async (req, res) => {
     const { id } = req.params;
     try {
         const result = await db.query('SELECT * FROM tasks WHERE id = $1', [id]);

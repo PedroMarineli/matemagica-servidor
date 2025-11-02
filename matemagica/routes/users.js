@@ -5,12 +5,17 @@ const db = require('../db'); // Importa a configuração do banco de dados
 const multer = require('multer');
 const path = require('path');
 const bcrypt = require('bcrypt');
+const jwt = require('jsonwebtoken');
 const saltRounds = 10; // Fator de custo para o bcrypt
+
+const { authenticateToken, authorizeRole } = require('../middleware/auth');
+const { formatStudentPhotoUrl, PUBLIC_ROOT } = require('../utils/pathUtils');
 
 // Configuração do Multer para upload de fotos de alunos
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
-    cb(null, 'public/images/students/');
+    // Usa o PUBLIC_ROOT para consistência
+    cb(null, path.join('public', PUBLIC_ROOT));
   },
   filename: function (req, file, cb) {
     // Garante um nome de arquivo único para evitar sobrescrever
@@ -21,21 +26,35 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage: storage });
 
-/* GET: Listar todos os usuários. */
-router.get('/', async function(req, res, next) {
+// Função "fire-and-forget" para processar a imagem em segundo plano
+async function processCartoonization(imageFilename, studentId) {
+  console.log(`Iniciando cartoonização para o aluno ID: ${studentId}`);
   try {
-    const result = await db.query('SELECT * FROM users');
+    // Constrói o caminho completo para a imagem
+    const fullImagePath = path.join(__dirname, '..', '..', 'public', PUBLIC_ROOT, imageFilename);
+    const cartoon_image_filename = await cartoonizeImage(fullImagePath);
+    
+    if (cartoon_image_filename) {
+      // Salva apenas o nome do ficheiro na base de dados
+      await db.query(
+        'UPDATE users SET cartoon_image_path = $1 WHERE id = $2',
+        [cartoon_image_filename, studentId]
+      );
+      console.log(`Imagem cartoonizada salva para o aluno ID: ${studentId}`);
+    }
+  } catch (error) {
+    console.error(`Falha ao processar a imagem para o aluno ID: ${studentId}`, error);
+  }
+}
+
+/* GET: Listar todos os usuários. (Apenas para professores) */
+router.get('/', authenticateToken, authorizeRole('teacher'), async function(req, res, next) {
+  try {
+    const result = await db.query('SELECT id, username, email, type, classroom_id, photo_path, cartoon_image_path FROM users');
     // Adiciona o caminho completo da imagem para cada usuário
     const users = result.rows.map(user => {
-      if (user.photo_path) {
-        // Remove 'public' do caminho para que a URL seja relativa à raiz do servidor web
-        const photoPath = user.photo_path.replace(/\\/g, '/').replace('public/', '');
-        user.photo_path = `${req.protocol}://${req.get('host')}/${photoPath}`;
-      }
-      if (user.cartoon_image_path) {
-        const cartoonPath = user.cartoon_image_path.replace(/\\/g, '/').replace('public/', '');
-        user.cartoon_image_path = `${req.protocol}://${req.get('host')}/${cartoonPath}`;
-      }
+      user.photo_path = formatStudentPhotoUrl(user.photo_path, req);
+      user.cartoon_image_path = formatStudentPhotoUrl(user.cartoon_image_path, req);
       return user;
     });
     res.json(users);
@@ -45,22 +64,20 @@ router.get('/', async function(req, res, next) {
   }
 });
 
-/* GET: Buscar um usuário pelo ID. */
-router.get('/:id', async function(req, res, next) {
+/* GET: Buscar um usuário pelo ID. (Usuário pode buscar a si mesmo, professor pode buscar qualquer um) */
+router.get('/:id', authenticateToken, async function(req, res, next) {
   const { id } = req.params;
+  
+  if (req.user.role !== 'teacher' && req.user.id !== parseInt(id)) {
+    return res.status(403).send('Acesso negado.');
+  }
+
   try {
-    const result = await db.query('SELECT * FROM users WHERE id = $1', [id]);
+    const result = await db.query('SELECT id, username, email, type, classroom_id, photo_path, cartoon_image_path FROM users WHERE id = $1', [id]);
     if (result.rows.length > 0) {
       const user = result.rows[0];
-      if (user.photo_path) {
-        // Remove 'public' do caminho para que a URL seja relativa à raiz do servidor web
-        const photoPath = user.photo_path.replace(/\\/g, '/').replace('public/', '');
-        user.photo_path = `${req.protocol}://${req.get('host')}/${photoPath}`;
-      }
-      if (user.cartoon_image_path) {
-        const cartoonPath = user.cartoon_image_path.replace(/\\/g, '/').replace('public/', '');
-        user.cartoon_image_path = `${req.protocol}://${req.get('host')}/${cartoonPath}`;
-      }
+      user.photo_path = formatStudentPhotoUrl(user.photo_path, req);
+      user.cartoon_image_path = formatStudentPhotoUrl(user.cartoon_image_path, req);
       res.json(user);
     } else {
       res.status(404).send('Usuário não encontrado.');
@@ -71,30 +88,7 @@ router.get('/:id', async function(req, res, next) {
   }
 });
 
-/* POST: Registrar um novo usuário. */
-// CORRIGIDO: O array de valores estava incompleto. Adicionei o 'type'.
-router.post('/', async function(req, res, next) {
-  const { username, email, password, type, classroom_id, photo_path, avatar_url } = req.body;
-  try {
-    // É altamente recomendável que você faça o hash da senha antes de salvar
-    const result = await db.query(
-      'INSERT INTO users (username, email, password, type, classroom_id, photo_path, avatar_url) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *',
-      [username, email, password, type, classroom_id, photo_path, avatar_url]
-    );
-    // Remove a senha do objeto de resposta por segurança
-    delete result.rows[0].password;
-    res.status(201).json(result.rows[0]);
-  } catch (err) {
-    console.error(err);
-    // Adiciona uma verificação para erro de chave estrangeira
-    if (err.code === '23503') { // Código de erro do PostgreSQL para violação de FK
-        return res.status(400).json({ error: 'A classroom_id fornecida não existe.' });
-    }
-    res.status(500).send('Erro ao registrar novo usuário.');
-  }
-});
-
-/* POST: Registrar um novo professor (RF02). */
+/* POST: Registrar um novo professor (RF02). (Público) */
 router.post('/register/teacher', async function(req, res, next) {
   const { username, email, password } = req.body;
   
@@ -103,15 +97,13 @@ router.post('/register/teacher', async function(req, res, next) {
   }
   
   try {
-    // Gera o hash da senha
     const hashedPassword = await bcrypt.hash(password, saltRounds);
     
     const result = await db.query(
-      'INSERT INTO users (username, email, password, type) VALUES ($1, $2, $3, $4) RETURNING *',
+      'INSERT INTO users (username, email, password, type) VALUES ($1, $2, $3, $4) RETURNING id, username, email, type',
       [username, email, hashedPassword, 'teacher']
     );
-    // Remove a senha do objeto de resposta por segurança
-    delete result.rows[0].password;
+    
     res.status(201).json(result.rows[0]);
   } catch (err) {
     console.error(err);
@@ -122,56 +114,53 @@ router.post('/register/teacher', async function(req, res, next) {
   }
 });
 
-/* POST: Registrar um novo aluno por um professor (RF03). */
-router.post('/register/student', upload.single('photo'), async function(req, res, next) {
-  const { username, password, teacher_id, classroom_id } = req.body;
-  // O caminho do arquivo estará em req.file.path
-  const photo_path = req.file ? req.file.path.replace(/\\/g, '/') : null;
+/* POST: Registrar um novo aluno por um professor (RF03). (Apenas professores) */
+router.post('/register/student', authenticateToken, authorizeRole('teacher'), upload.single('photo'), async function(req, res, next) {
+  const { username, password, classroom_id } = req.body;
+  const teacher_id = req.user.id;
+  const photo_filename = req.file ? req.file.filename : null;
   
-  if (!username || !password || !teacher_id) {
-    return res.status(400).json({ error: 'Username, senha e teacher_id são obrigatórios.' });
+  if (!username || !password) {
+    return res.status(400).json({ error: 'Username e senha são obrigatórios.' });
   }
   
-  try {
-    // Verifica se o teacher_id é válido e é um professor
-    const teacherCheck = await db.query('SELECT id FROM users WHERE id = $1 AND type = $2', [teacher_id, 'teacher']);
-    if (teacherCheck.rows.length === 0) {
-      return res.status(404).json({ error: 'Professor não encontrado ou usuário não é um professor.' });
-    }
-    
-    // Verifica se classroom_id existe, se fornecido
-    if (classroom_id) {
-      const classroomCheck = await db.query('SELECT id FROM classroom WHERE id = $1', [classroom_id]);
-      if (classroomCheck.rows.length === 0) {
-        return res.status(404).json({ error: 'Sala de aula não encontrada.' });
-      }
-    }
+  const client = await db.getClient();
 
-    let cartoon_image_path = null;
-    if (photo_path) {
-      try {
-        // Gera a versão cartoon da imagem
-        const fullImagePath = path.join(__dirname, '..', photo_path);
-        cartoon_image_path = await cartoonizeImage(fullImagePath);
-      } catch (cartoonError) {
-        console.error("Could not cartoonize image, proceeding without it.", cartoonError);
-        // Decide como lidar com a falha: talvez registrá-la e continuar sem uma imagem em cartoon
+  try {
+    await client.query('BEGIN');
+
+    if (classroom_id) {
+      const classroomCheck = await client.query('SELECT id FROM classroom WHERE id = $1 AND teacher_id = $2', [classroom_id, teacher_id]);
+      if (classroomCheck.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ error: 'Sala de aula não encontrada ou não pertence a este professor.' });
       }
     }
     
-    // Gera o hash da senha
     const hashedPassword = await bcrypt.hash(password, saltRounds);
 
-    // Cria o aluno, salvando o caminho do arquivo da foto e da versão cartoon
-    const result = await db.query(
-      'INSERT INTO users (username, password, type, classroom_id, photo_path, cartoon_image_path) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
-      [username, hashedPassword, 'student', classroom_id, photo_path, cartoon_image_path]
+    const result = await client.query(
+      'INSERT INTO users (username, password, type, classroom_id, photo_path) VALUES ($1, $2, $3, $4, $5) RETURNING id, username, type, classroom_id, photo_path',
+      [username, hashedPassword, 'student', classroom_id, photo_filename]
     );
     
-    // Remove a senha do objeto de resposta por segurança
-    delete result.rows[0].password;
-    res.status(201).json(result.rows[0]);
+    const studentData = result.rows[0];
+    
+    await client.query('COMMIT');
+
+    // Formata a URL da foto para a resposta
+    studentData.photo_path = formatStudentPhotoUrl(studentData.photo_path, req);
+
+    res.status(201).json(studentData); // Responde imediatamente
+
+    // --- Processamento assíncrono da imagem ---
+    if (photo_filename) {
+      processCartoonization(photo_filename, studentData.id);
+    }
+    // -----------------------------------------
+
   } catch (err) {
+    await client.query('ROLLBACK');
     console.error(err);
     if (err.code === '23505') {
         return res.status(400).json({ error: 'Username já existe.' });
@@ -179,13 +168,15 @@ router.post('/register/student', upload.single('photo'), async function(req, res
     if (err.code === '23503') {
         return res.status(400).json({ error: 'A classroom_id fornecida não existe.' });
     }
-    res.status(500).send('Erro ao registrar novo aluno.');
+    if (!res.headersSent) {
+        res.status(500).send('Erro ao registrar novo aluno.');
+    }
+  } finally {
+    client.release();
   }
 });
 
 /* POST: Autenticar (login) um usuário. */
-// MELHORADO: Retorna os dados do usuário (sem a senha) em caso de sucesso.
-// Agora aceita email OU username
 router.post('/login', async function(req, res, next) {
     const { username, email, password } = req.body;
     const loginIdentifier = username || email;
@@ -195,22 +186,21 @@ router.post('/login', async function(req, res, next) {
     }
     
     try {
-        // Busca por username OU email
-        const result = await db.query(
-            'SELECT * FROM users WHERE username = $1 OR email = $1', 
-            [loginIdentifier]
-        );
+        const result = await db.query('SELECT * FROM users WHERE username = $1 OR email = $1', [loginIdentifier]);
         if (result.rows.length > 0) {
             const user = result.rows[0];
-            // Compara a senha fornecida com o hash salvo no banco
             const match = await bcrypt.compare(password, user.password);
 
             if (match) {
-                // Senha correta. Retorna os dados do usuário.
-                delete user.password; // Crucial remover a senha
-                res.json(user);
+                const payload = { id: user.id, username: user.username, role: user.type };
+                const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '1h' });
+                
+                user.photo_path = formatStudentPhotoUrl(user.photo_path, req);
+                user.cartoon_image_path = formatStudentPhotoUrl(user.cartoon_image_path, req);
+                delete user.password;
+
+                res.json({ token: token, user: user });
             } else {
-                // Senha incorreta
                 res.status(401).send('Credenciais inválidas.');
             }
         } else {
@@ -223,36 +213,48 @@ router.post('/login', async function(req, res, next) {
 });
 
 /* PUT: Atualizar um usuário existente pelo ID. */
-router.put('/:id', upload.single('photo'), async (req, res, next) => {
+router.put('/:id', authenticateToken, upload.single('photo'), async (req, res, next) => {
   const { id } = req.params;
-  let { username, email, password, type, classroom_id, avatar_url } = req.body;
-  const photo_path = req.file ? req.file.path.replace(/\\/g, '/') : undefined;
+  let { username, email, password, type, classroom_id } = req.body;
+  const photo_filename = req.file ? req.file.filename : undefined;
+
+  if (req.user.role !== 'teacher' && req.user.id !== parseInt(id)) {
+    return res.status(403).send('Acesso negado.');
+  }
+
+  const client = await db.getClient();
 
   try {
-    // Busca o usuário atual para obter o photo_path antigo, se necessário
-    const currentUser = await db.query('SELECT photo_path FROM users WHERE id = $1', [id]);
-    if (currentUser.rows.length === 0) {
+    await client.query('BEGIN');
+
+    const currentUserResult = await client.query('SELECT * FROM users WHERE id = $1', [id]);
+    if (currentUserResult.rows.length === 0) {
+      await client.query('ROLLBACK');
       return res.status(404).send('Usuário não encontrado.');
     }
+    const currentUser = currentUserResult.rows[0];
 
-    let cartoon_image_path = undefined;
-    if (photo_path) {
-      try {
-        // Gera a versão cartoon da nova imagem
-        const fullImagePath = path.join(__dirname, '..', photo_path);
-        cartoon_image_path = await cartoonizeImage(fullImagePath);
-      } catch (cartoonError) {
-        console.error("Could not cartoonize image on update, proceeding without it.", cartoonError);
-      }
+    if (req.user.role === 'teacher' && currentUser.type === 'student') {
+        if (currentUser.classroom_id) {
+            const studentClassroom = await client.query('SELECT teacher_id FROM classroom WHERE id = $1', [currentUser.classroom_id]);
+            if(studentClassroom.rows.length === 0 || studentClassroom.rows[0].teacher_id !== req.user.id) {
+                await client.query('ROLLBACK');
+                return res.status(403).send('Você só pode editar alunos de suas próprias turmas.');
+            }
+        } else if (classroom_id) { // Se o aluno não tem turma, mas uma está sendo atribuída
+             const newClassroom = await client.query('SELECT teacher_id FROM classroom WHERE id = $1', [classroom_id]);
+             if(newClassroom.rows.length === 0 || newClassroom.rows[0].teacher_id !== req.user.id) {
+                await client.query('ROLLBACK');
+                return res.status(403).send('Você só pode atribuir alunos para suas próprias turmas.');
+            }
+        }
     }
-
-    // Se uma nova senha foi fornecida, gera o hash dela
+    
     if (password) {
       password = await bcrypt.hash(password, saltRounds);
     }
 
-    // Constrói a query de atualização dinamicamente
-    const fields = { username, email, password, type, classroom_id, photo_path, avatar_url, cartoon_image_path };
+    const fields = { username, email, password, type, classroom_id, photo_path: photo_filename };
     const updates = [];
     const values = [];
     let queryIndex = 1;
@@ -266,42 +268,65 @@ router.put('/:id', upload.single('photo'), async (req, res, next) => {
     }
 
     if (updates.length === 0) {
+      await client.query('ROLLBACK');
       return res.status(400).send('Nenhum campo para atualizar.');
     }
 
     values.push(id);
     const query = `UPDATE users SET ${updates.join(', ')} WHERE id = $${queryIndex} RETURNING *`;
 
-    const result = await db.query(query, values);
+    const result = await client.query(query, values);
+    await client.query('COMMIT');
 
-    if (result.rows.length > 0) {
-      // Remove a senha do objeto de resposta por segurança
-      delete result.rows[0].password;
-      res.json(result.rows[0]);
-    } else {
-      // Este caso é improvável se a verificação inicial for bem-sucedida, mas é bom ter
-      res.status(404).send('Usuário não encontrado para atualização.');
+    const updatedUser = result.rows[0];
+    delete updatedUser.password;
+      
+    updatedUser.photo_path = formatStudentPhotoUrl(updatedUser.photo_path, req);
+    updatedUser.cartoon_image_path = formatStudentPhotoUrl(updatedUser.cartoon_image_path, req);
+
+    res.json(updatedUser);
+
+    if (photo_filename) {
+        processCartoonization(photo_filename, updatedUser.id);
     }
+
   } catch (err) {
+    await client.query('ROLLBACK');
     console.error(err);
+    if (err.code === '23505') {
+        return res.status(400).json({ error: 'Username ou email já em uso.' });
+    }
+     if (err.code === '23503') {
+        return res.status(400).json({ error: 'A classroom_id fornecida não existe.' });
+    }
     res.status(500).send('Erro ao atualizar usuário.');
+  } finally {
+    client.release();
   }
 });
 
-/* DELETE: Remover um usuário pelo ID. */
-// Nenhuma alteração necessária aqui, a exclusão é baseada apenas no ID.
-router.delete('/:id', async (req, res, next) => {
+/* DELETE: Remover um usuário pelo ID. (Apenas professores) */
+router.delete('/:id', authenticateToken, authorizeRole('teacher'), async (req, res, next) => {
     const { id } = req.params;
+    const client = await db.getClient();
     try {
-        const result = await db.query('DELETE FROM users WHERE id = $1 RETURNING *', [id]);
+        await client.query('BEGIN');
+        // Opcional: Adicionar verificação se o professor só pode deletar seus próprios alunos
+        const result = await client.query('DELETE FROM users WHERE id = $1 RETURNING *', [id]);
+        
         if (result.rows.length > 0) {
+            await client.query('COMMIT');
             res.send(`Usuário ${result.rows[0].username} (ID: ${id}) foi removido.`);
         } else {
+            await client.query('ROLLBACK');
             res.status(404).send('Usuário não encontrado para exclusão.');
         }
     } catch (err) {
+        await client.query('ROLLBACK');
         console.error(err);
         res.status(500).send('Erro ao deletar usuário.');
+    } finally {
+        client.release();
     }
 });
 

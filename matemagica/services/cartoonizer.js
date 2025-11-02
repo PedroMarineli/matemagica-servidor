@@ -1,7 +1,7 @@
-// Importa os pacotes usando a sintaxe de Módulo ES (import)
-import { GoogleGenAI } from "@google/genai";
-import * as fs from "node:fs";
-import * as path from "node:path";
+// Importa os pacotes usando a sintaxe de Módulo CommonJS (require)
+const { GoogleGenAI } = require("@google/genai");
+const fs = require("node:fs");
+const path = require("node:path");
 
 // Inicializa o GenAI com a chave da API do ambiente
 // O novo SDK também aceita a chave diretamente no construtor
@@ -68,5 +68,5 @@ async function cartoonizeImage(imagePath) {
   }
 }
 
-// Usa 'export' (ES Modules) em vez de 'module.exports'
-export { cartoonizeImage };
+// Usa 'module.exports' (CommonJS) em vez de 'export'
+module.exports = { cartoonizeImage };
