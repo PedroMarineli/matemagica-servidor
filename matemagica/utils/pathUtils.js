@@ -1,7 +1,7 @@
 const path = require('path');
 
 // Define a raiz pública onde as imagens são servidas
-const PUBLIC_ROOT = '/images/students/';
+const PUBLIC_ROOT = 'images/students';  
 
 /**
  * Formata a URL completa para a foto de um aluno.
@@ -16,7 +16,8 @@ function formatStudentPhotoUrl(filename, req) {
     // Constrói a URL base (http://localhost:3000)
     const baseUrl = `${req.protocol}://${req.get('host')}`;
     // Junta a base URL com o caminho público e o nome do ficheiro
-    return new URL(path.join(PUBLIC_ROOT, filename), baseUrl).href;
+    const imageUrlPath = path.posix.join('/', PUBLIC_ROOT, filename);
+    return new URL(imageUrlPath, baseUrl).href;         
 }
 
 module.exports = {
