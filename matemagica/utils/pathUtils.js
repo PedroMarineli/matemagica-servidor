@@ -6,7 +6,7 @@ const PUBLIC_ROOT = 'images/students';
 /**
  * Formata a URL completa para a foto de um aluno.
  * @param {string} filename - O nome do ficheiro da imagem.
- * @param {object} req - O objeto de requisição do Express.
+ * @param {object} req - O objeto de requisição do Express
  * @returns {string|null} A URL completa da imagem ou null se não houver filename.
  */
 function formatStudentPhotoUrl(filename, req) {
