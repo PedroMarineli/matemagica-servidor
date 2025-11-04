@@ -124,7 +124,7 @@ router.post('/register/student', authenticateToken, authorizeRole('teacher'), up
     return res.status(400).json({ error: 'Username e senha são obrigatórios.' });
   }
   
-  const client = await db.getClient();
+  const client = await db.connect();
 
   try {
     await client.query('BEGIN');
@@ -222,7 +222,7 @@ router.put('/:id', authenticateToken, upload.single('photo'), async (req, res, n
     return res.status(403).send('Acesso negado.');
   }
 
-  const client = await db.getClient();
+  const client = await db.connect();
 
   try {
     await client.query('BEGIN');
@@ -308,7 +308,7 @@ router.put('/:id', authenticateToken, upload.single('photo'), async (req, res, n
 /* DELETE: Remover um usuário pelo ID. (Apenas professores) */
 router.delete('/:id', authenticateToken, authorizeRole('teacher'), async (req, res, next) => {
     const { id } = req.params;
-    const client = await db.getClient();
+    const client = await db.connect();
     try {
         await client.query('BEGIN');
         // Opcional: Adicionar verificação se o professor só pode deletar seus próprios alunos
