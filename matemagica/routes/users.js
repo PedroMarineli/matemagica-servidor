@@ -20,7 +20,7 @@ const storage = multer.diskStorage({
   filename: function (req, file, cb) {
     // Garante um nome de arquivo único para evitar sobrescrever
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+    cb(null, path.join(__dirname, '..', 'public', PUBLIC_ROOT));
   }
 });
 
@@ -31,7 +31,7 @@ async function processCartoonization(imageFilename, studentId) {
   console.log(`Iniciando cartoonização para o aluno ID: ${studentId}`);
   try {
     // Constrói o caminho completo para a imagem
-    const fullImagePath = path.join(__dirname, '..', '..', 'public', PUBLIC_ROOT, imageFilename);
+    const fullImagePath = path.join(__dirname, '..', 'public', PUBLIC_ROOT, imageFilename);
     const cartoon_image_filename = await cartoonizeImage(fullImagePath);
     
     if (cartoon_image_filename) {
