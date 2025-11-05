@@ -14,13 +14,13 @@ const { formatStudentPhotoUrl, PUBLIC_ROOT } = require('../utils/pathUtils');
 // Configuração do Multer para upload de fotos de alunos
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
-    // Usa o PUBLIC_ROOT para consistência
-    cb(null, path.join('public', PUBLIC_ROOT));
+    // 1. O 'destination' precisa do caminho completo
+    cb(null, path.join(__dirname, '..', 'public', PUBLIC_ROOT));
   },
   filename: function (req, file, cb) {
-    // Garante um nome de arquivo único para evitar sobrescrever
+    // 2. O 'filename' precisa apenas de um nome de ficheiro único
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, path.join(__dirname, '..', 'public', PUBLIC_ROOT));
+    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
   }
 });
 
