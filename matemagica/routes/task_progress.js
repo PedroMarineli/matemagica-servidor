@@ -102,15 +102,18 @@ router.put('/update', authenticateToken, async (req, res) => {
     }
 
     try {
-        // O score só é atualizado se um valor for enviado (quando não é, permanece o valor antigo)
-        const updateResult = await db.query(
-            `UPDATE task_progress
-             SET status = $1, 
-                 score = CASE WHEN $2 IS NOT NULL THEN $2 ELSE score END
-             WHERE student_id = $3 AND task_id = $4
-             RETURNING *`,
-            [status, score, student_id, task_id]
-        );
+        
+        // --- INÍCIO DA CORREÇÃO ---
+        // Adicionámos "::numeric" para dizer ao PostgreSQL que $2 é um número
+        const updateQuery = `
+            UPDATE task_progress
+            SET status = $1, 
+                score = CASE WHEN $2 IS NOT NULL THEN $2::numeric ELSE score END
+            WHERE student_id = $3 AND task_id = $4
+            RETURNING *`;
+        // --- FIM DA CORREÇÃO ---
+
+        const updateResult = await db.query(updateQuery, [status, score, student_id, task_id]);
 
         if (updateResult.rows.length === 0) {
             return res.status(404).json({ error: 'Registro de progresso não encontrado.' });
@@ -123,7 +126,6 @@ router.put('/update', authenticateToken, async (req, res) => {
     }
 });
 // --- FIM DA ROTA ADICIONADA ---
-
 
 // Rota para um aluno submeter uma tarefa (RF08)
 router.post('/submit', authenticateToken, async (req, res) => {
