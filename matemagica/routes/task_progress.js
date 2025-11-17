@@ -88,11 +88,9 @@ router.get('/teacher/dashboard', authenticateToken, authorizeRole('teacher'), as
 // --- INÍCIO DA ROTA ADICIONADA ---
 // Rota para atualizar o status de uma tarefa (ex: Not Started -> In Progress)
 router.put('/update', authenticateToken, async (req, res) => {
-    // O frontend envia student_id, task_id, status, e score
     const { student_id, task_id, status, score } = req.body;
-    const user_id = req.user.id; // ID do usuário logado (do token)
+    const user_id = req.user.id;
 
-    // Validação: Garante que o aluno só pode atualizar o seu próprio progresso
     if (req.user.role === 'student' && user_id !== parseInt(student_id)) {
         return res.status(403).json({ error: 'Você não tem permissão para atualizar este recurso.' });
     }
@@ -104,11 +102,14 @@ router.put('/update', authenticateToken, async (req, res) => {
     try {
         
         // --- INÍCIO DA CORREÇÃO ---
-        // Adicionámos "::numeric" para dizer ao PostgreSQL que $2 é um número
+        // Trocamos o CASE por COALESCE.
+        // COALESCE($2::numeric, score) significa: "Tente usar o parâmetro $2 (o score enviado).
+        // Se $2 for NULL, use o valor que já está na coluna 'score'".
+        
         const updateQuery = `
             UPDATE task_progress
             SET status = $1, 
-                score = CASE WHEN $2 IS NOT NULL THEN $2::numeric ELSE score END
+                score = COALESCE($2::numeric, score)
             WHERE student_id = $3 AND task_id = $4
             RETURNING *`;
         // --- FIM DA CORREÇÃO ---
@@ -126,6 +127,7 @@ router.put('/update', authenticateToken, async (req, res) => {
     }
 });
 // --- FIM DA ROTA ADICIONADA ---
+
 
 // Rota para um aluno submeter uma tarefa (RF08)
 router.post('/submit', authenticateToken, async (req, res) => {
