@@ -84,6 +84,47 @@ router.get('/teacher/dashboard', authenticateToken, authorizeRole('teacher'), as
     }
 });
 
+
+// --- INÍCIO DA ROTA ADICIONADA ---
+// Rota para atualizar o status de uma tarefa (ex: Not Started -> In Progress)
+router.put('/update', authenticateToken, async (req, res) => {
+    // O frontend envia student_id, task_id, status, e score
+    const { student_id, task_id, status, score } = req.body;
+    const user_id = req.user.id; // ID do usuário logado (do token)
+
+    // Validação: Garante que o aluno só pode atualizar o seu próprio progresso
+    if (req.user.role === 'student' && user_id !== parseInt(student_id)) {
+        return res.status(403).json({ error: 'Você não tem permissão para atualizar este recurso.' });
+    }
+    
+    if (!student_id || !task_id || !status) {
+         return res.status(400).json({ error: 'student_id, task_id e status são obrigatórios.' });
+    }
+
+    try {
+        // O score só é atualizado se um valor for enviado (quando não é, permanece o valor antigo)
+        const updateResult = await db.query(
+            `UPDATE task_progress
+             SET status = $1, 
+                 score = CASE WHEN $2 IS NOT NULL THEN $2 ELSE score END
+             WHERE student_id = $3 AND task_id = $4
+             RETURNING *`,
+            [status, score, student_id, task_id]
+        );
+
+        if (updateResult.rows.length === 0) {
+            return res.status(404).json({ error: 'Registro de progresso não encontrado.' });
+        }
+
+        res.status(200).json(updateResult.rows[0]);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Erro ao atualizar o progresso da tarefa.' });
+    }
+});
+// --- FIM DA ROTA ADICIONADA ---
+
+
 // Rota para um aluno submeter uma tarefa (RF08)
 router.post('/submit', authenticateToken, async (req, res) => {
     const { task_id, answers } = req.body;
