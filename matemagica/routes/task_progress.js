@@ -4,12 +4,11 @@ const db = require('../db');
 const { authenticateToken, authorizeRole } = require('../middleware/auth');
 const progressService = require('../services/progressService');
 
-// Rota para obter o progresso de todas as tarefas de um aluno específico (RF06) - Apenas o próprio aluno pode ver
+// Rota para obter o progresso de todas as tarefas de um aluno específico (RF06)
 router.get('/student/:student_id', authenticateToken, async (req, res) => {
     const { student_id } = req.params;
-    const { status } = req.query; // Permite filtrar por status (pending/completed)
+    const { status } = req.query; 
     
-    // Garante que o usuário autenticado só possa acessar seu próprio progresso
     if (req.user.id !== parseInt(student_id) && req.user.role !== 'teacher') {
         return res.status(403).json({ error: 'Você não tem permissão para acessar este recurso.' });
     }
@@ -31,7 +30,6 @@ router.get('/student/:student_id', authenticateToken, async (req, res) => {
         
         const params = [student_id];
         
-        // RF06: Filtrar tarefas pendentes ou concluídas
         if (status === 'pending') {
             query += ` AND tp.status IN ('Not Started', 'In Progress')`;
         } else if (status === 'completed') {
@@ -48,11 +46,10 @@ router.get('/student/:student_id', authenticateToken, async (req, res) => {
     }
 });
 
-// Rota para obter o progresso de todos os alunos em uma tarefa específica - Apenas para professores
+// Rota para obter o progresso de todos os alunos em uma tarefa específica
 router.get('/task/:task_id', authenticateToken, authorizeRole('teacher'), async (req, res) => {
     const { task_id } = req.params;
     try {
-        // Junta task_progress com users para obter detalhes do aluno
         const result = await db.query(
             `SELECT 
                 tp.student_id, 
@@ -73,7 +70,7 @@ router.get('/task/:task_id', authenticateToken, authorizeRole('teacher'), async 
     }
 });
 
-// Rota para dashboard do professor - estatísticas de desempenho (RF07) - Apenas para professores
+// Rota para dashboard do professor (RF07)
 router.get('/teacher/dashboard', authenticateToken, authorizeRole('teacher'), async (req, res) => {
     const teacher_id = req.user.id;
     const { classroom_id } = req.query;
@@ -97,7 +94,6 @@ router.post('/submit', authenticateToken, async (req, res) => {
     }
 
     try {
-        // Verifica se o progresso da tarefa existe para este aluno
         const progressCheck = await db.query(
             'SELECT * FROM task_progress WHERE student_id = $1 AND task_id = $2',
             [student_id, task_id]
@@ -107,7 +103,6 @@ router.post('/submit', authenticateToken, async (req, res) => {
             return res.status(404).json({ error: 'Tarefa não atribuída a este aluno.' });
         }
 
-        // Busca a tarefa para obter a resposta correta
         const taskResult = await db.query('SELECT answer, type FROM tasks WHERE id = $1', [task_id]);
         if (taskResult.rows.length === 0) {
             return res.status(404).json({ error: 'Tarefa não encontrada.' });
@@ -117,45 +112,34 @@ router.post('/submit', authenticateToken, async (req, res) => {
         const taskType = taskResult.rows[0].type;
         let score = 0;
 
-        // --- INÍCIO DA CORREÇÃO ---
-        
-        // 1. Defina todos os tipos de tarefa que devem ser corrigidos automaticamente
+        // Lógica de correção automática CORRIGIDA
         const autoGradedTypes = [
             'addition', 'subtraction', 'multiplication', 'division',
             'additionWithProblems', 'subtractionWithProblems', 'multiplicationWithProblems', 'divisionWithProblems',
             'multiple_choice', 'fill_in_the_blanks'
         ];
 
-        // 2. Verifique se o taskType está na nossa lista
         if (autoGradedTypes.includes(taskType)) {
             
-            // 'correctAnswer' será um array JSON (ex: "[0, 18, 2]")
             const correct = JSON.parse(correctAnswer);
             const submitted = Array.isArray(answers) ? answers : [answers];
             let correctCount = 0;
 
-            // 3. Verifique se 'correct' é um array antes de iterar
             if (Array.isArray(correct)) {
                 for (let i = 0; i < correct.length; i++) {
-                    // Compara a resposta submetida (string) com a resposta correta (número)
                     if (String(correct[i]).toLowerCase() === String(submitted[i]).toLowerCase()) {
                         correctCount++;
                     }
                 }
-                // Calcula a pontuação
                 score = (correctCount / correct.length) * 100;
-
             } else {
-                console.error("Formato de resposta correta inválido. Esperava um array.");
-                score = 0; // Falha segura
+                console.error("Formato de resposta inválido. Esperava um array.");
+                // Retorna um erro para o frontend saber que falhou
+                return res.status(500).json({ error: 'Erro interno: formato de resposta da tarefa é inválido.' });
             }
-
         } else {
-            // Para tipos de resposta aberta, a pontuação pode ser definida manualmente mais tarde
             score = null; 
         }
-        // --- FIM DA CORREÇÃO ---
-
 
         // Atualiza o progresso da tarefa
         const updateResult = await db.query(
@@ -177,4 +161,5 @@ router.post('/submit', authenticateToken, async (req, res) => {
     }
 });
 
+// ESTE É O ÚNICO EXPORT NO FINAL DO FICHEIRO
 module.exports = router;
