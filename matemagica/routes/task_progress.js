@@ -137,7 +137,8 @@ router.post('/submit', authenticateToken, async (req, res) => {
     const { task_id, answers, number_of_attempts, score } = req.body;
     const student_id = req.user.id;
 
-    if (!task_id || answers === undefined || number_of_attempts === undefined || score === undefined) {
+    // 2. Validação atualizada para incluir os novos campos
+    if (task_id === undefined || answers === undefined || number_of_attempts === undefined || score === undefined) {
         return res.status(400).json({ error: 'Todos os campos (task_id, answers, number_of_attempts, score) são obrigatórios.' });
     }
     // --- FIM DA CORREÇÃO ---
@@ -158,7 +159,7 @@ router.post('/submit', authenticateToken, async (req, res) => {
         // --- FIM DA REMOÇÃO ---
 
         // --- INÍCIO DA CORREÇÃO ---
-        // 2. Atualizar o banco de dados com os valores recebidos
+        // 3. Atualizar o banco de dados com os valores recebidos do frontend
         const updateResult = await db.query(
             `UPDATE task_progress 
              SET status = 'Submitted', 
@@ -168,6 +169,7 @@ router.post('/submit', authenticateToken, async (req, res) => {
                  number_of_attempts = $3
              WHERE student_id = $4 AND task_id = $5
              RETURNING *`,
+            // 4. Ordem dos parâmetros corrigida
             [JSON.stringify(answers), score, number_of_attempts, student_id, task_id]
         );
         // --- FIM DA CORREÇÃO ---
