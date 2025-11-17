@@ -19,13 +19,15 @@ function fileToGenerativePart(filePath, mimeType) {
 }
 
 async function cartoonizeImage(imagePath) {
+  // Apague esta linha se a sua chave de API estiver a ser impressa no log
+
   if (!process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY === "SUA_CHAVE_DE_API_AQUI") {
     console.warn("GEMINI_API_KEY not set or is default. Skipping cartoonize.");
     return null;
   }
   
   try {
-    const prompt = "Transforme esta foto de um estudante em um desenho estilo cartoon, mantendo as características da pessoa. Retorne apenas a imagem, sem texto adicional.";
+    const prompt = "Transforme esta foto de estudante em um personagem de animação 3D, estilo Pixar. Mantenha as características principais da pessoa, mas com olhos grandes e expressivos e cores muito vivas e brilhantes. O resultado deve ser divertido e amigável. Retorne apenas a imagem, sem texto adicional.";
 
     const imageMimeType = "image/png"; // Assumindo PNG, pode ser dinâmico se necessário
     const imagePart = fileToGenerativePart(imagePath, imageMimeType);
@@ -33,7 +35,7 @@ async function cartoonizeImage(imagePath) {
     // --- MUDANÇA PRINCIPAL AQUI ---
     // Chamada direta ao modelo usando a nova sintaxe do SDK
     const result = await genAI.models.generateContent({
-      model: "gemini-2.5-flash-image",
+      model: "gemini-2.5-flash-image", // MUDANÇA: Usando o modelo estável
       contents: [ { text: prompt }, imagePart ], // O 'contents' é um array de partes
     });
     // --- FIM DA MUDANÇA ---
@@ -50,14 +52,20 @@ async function cartoonizeImage(imagePath) {
       // Cria um nome de arquivo único para a imagem cartoonizada
       const originalFileName = path.basename(imagePath, path.extname(imagePath));
       const cartoonFileName = `cartoon-${originalFileName}-${Date.now()}.png`;
-      const outputPath = path.join('public', 'images', 'students', cartoonFileName);
+      
+      // --- CORREÇÃO 1: CAMINHO DE SAÍDA ---
+      // Constrói o caminho para .../matemagica/public/images/students/
+      const outputPath = path.join(__dirname, '..', 'public', 'images', 'students', cartoonFileName);
       
       // Garante que o diretório de destino exista
       fs.mkdirSync(path.dirname(outputPath), { recursive: true });
       
       fs.writeFileSync(outputPath, buffer);
-      console.log(`Image saved as ${outputPath}`);
-      return outputPath; // Retorna o caminho relativo para salvar no DB
+      console.log(`Image saved as ${outputPath}`); // Log do caminho completo
+      
+      // --- CORREÇÃO 2: VALOR DE RETORNO ---
+      // Retorna APENAS o nome do ficheiro para ser salvo no banco de dados
+      return cartoonFileName; 
     } else {
       throw new Error("Could not generate cartoon image from the response.");
     }
