@@ -131,12 +131,16 @@ router.put('/update', authenticateToken, async (req, res) => {
 
 // Rota para um aluno submeter uma tarefa (RF08)
 router.post('/submit', authenticateToken, async (req, res) => {
-    const { task_id, answers } = req.body;
+    
+    // --- INÍCIO DA CORREÇÃO ---
+    // 1. Receber 'score' e 'number_of_attempts' do frontend
+    const { task_id, answers, number_of_attempts, score } = req.body;
     const student_id = req.user.id;
 
-    if (!task_id || answers === undefined) {
-        return res.status(400).json({ error: 'ID da tarefa e respostas são obrigatórios.' });
+    if (!task_id || answers === undefined || number_of_attempts === undefined || score === undefined) {
+        return res.status(400).json({ error: 'Todos os campos (task_id, answers, number_of_attempts, score) são obrigatórios.' });
     }
+    // --- FIM DA CORREÇÃO ---
 
     try {
         const progressCheck = await db.query(
@@ -148,56 +152,25 @@ router.post('/submit', authenticateToken, async (req, res) => {
             return res.status(404).json({ error: 'Tarefa não atribuída a este aluno.' });
         }
 
-        const taskResult = await db.query('SELECT answer, type FROM tasks WHERE id = $1', [task_id]);
-        if (taskResult.rows.length === 0) {
-            return res.status(404).json({ error: 'Tarefa não encontrada.' });
-        }
+        // --- LÓGICA DE CORREÇÃO REMOVIDA ---
+        // Não precisamos mais verificar as respostas no backend,
+        // pois estamos a confiar na pontuação calculada pelo frontend.
+        // --- FIM DA REMOÇÃO ---
 
-        const correctAnswer = taskResult.rows[0].answer;
-        const taskType = taskResult.rows[0].type;
-        let score = 0;
-
-        // Lógica de correção automática CORRIGIDA
-        const autoGradedTypes = [
-            'addition', 'subtraction', 'multiplication', 'division',
-            'additionWithProblems', 'subtractionWithProblems', 'multiplicationWithProblems', 'divisionWithProblems',
-            'multiple_choice', 'fill_in_the_blanks'
-        ];
-
-        if (autoGradedTypes.includes(taskType)) {
-            
-            const correct = JSON.parse(correctAnswer);
-            const submitted = Array.isArray(answers) ? answers : [answers];
-            let correctCount = 0;
-
-            if (Array.isArray(correct)) {
-                for (let i = 0; i < correct.length; i++) {
-                    if (String(correct[i]).toLowerCase() === String(submitted[i]).toLowerCase()) {
-                        correctCount++;
-                    }
-                }
-                score = (correctCount / correct.length) * 100;
-            } else {
-                console.error("Formato de resposta inválido. Esperava um array.");
-                // Retorna um erro para o frontend saber que falhou
-                return res.status(500).json({ error: 'Erro interno: formato de resposta da tarefa é inválido.' });
-            }
-        } else {
-            score = null; 
-        }
-
-        // Atualiza o progresso da tarefa
+        // --- INÍCIO DA CORREÇÃO ---
+        // 2. Atualizar o banco de dados com os valores recebidos
         const updateResult = await db.query(
             `UPDATE task_progress 
              SET status = 'Submitted', 
                  answers = $1, 
                  score = $2, 
                  completion_date = NOW(), 
-                 number_of_attempts = number_of_attempts + 1
-             WHERE student_id = $3 AND task_id = $4
+                 number_of_attempts = $3
+             WHERE student_id = $4 AND task_id = $5
              RETURNING *`,
-            [JSON.stringify(answers), score, student_id, task_id]
+            [JSON.stringify(answers), score, number_of_attempts, student_id, task_id]
         );
+        // --- FIM DA CORREÇÃO ---
 
         res.status(200).json(updateResult.rows[0]);
     } catch (err) {
