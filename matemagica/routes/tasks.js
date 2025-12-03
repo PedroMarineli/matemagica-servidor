@@ -65,11 +65,13 @@ router.post('/', authenticateToken, authorizeRole('teacher'), async (req, res) =
 // Rota para obter todas as tarefas (pode ser filtrado por classroom_id) - Acessível a todos os usuários autenticados
 router.get('/', authenticateToken, async (req, res) => {
     const { classroom_id } = req.query;
+    const teacher_id = req.user.id;
+
     try {
-        let query = 'SELECT * FROM tasks';
-        const params = [];
+        let query = 'SELECT * FROM tasks WHERE teacher_id = $1';
+        const params = [teacher_id];
         if (classroom_id) {
-            query += ' WHERE classroom_id = $1';
+            query += ' AND classroom_id = $2';
             params.push(classroom_id);
         }
         const result = await db.query(query, params);

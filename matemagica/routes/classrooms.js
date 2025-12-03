@@ -27,8 +27,12 @@ router.post('/', authenticateToken, authorizeRole('teacher'), async (req, res) =
 
 // Rota para obter todas as salas de aula (acessível a todos os usuários autenticados)
 router.get('/', authenticateToken, async (req, res) => {
+    const teacher_id = req.user.id;
+
     try {
-        const result = await db.query('SELECT * FROM classroom');
+        const result = await db.query('SELECT * FROM classroom WHERE teacher_id = $1',
+            [teacher_id]
+        );
         res.status(200).json(result.rows);
     } catch (err) {
         console.error(err);

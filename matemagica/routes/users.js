@@ -49,8 +49,29 @@ async function processCartoonization(imageFilename, studentId) {
 
 /* GET: Listar todos os usuários. (Apenas para professores) */
 router.get('/', authenticateToken, authorizeRole('teacher'), async function(req, res, next) {
+  const teacher_id = req.user.id;
+
   try {
-    const result = await db.query('SELECT id, username, email, type, classroom_id, photo_path, cartoon_image_path FROM users');
+    const result = await db.query(`
+        SELECT 
+            u.id, 
+            u.username, 
+            u.classroom_id,
+            u.email, 
+            u.type, 
+            u.photo_path, 
+            u.cartoon_image_path,
+            c.name
+        FROM 
+            users AS u
+        INNER JOIN 
+            classroom AS c ON u.classroom_id = c.id
+        WHERE 
+            c.teacher_id = $1
+            AND u.type = 'student';
+      `,
+      [teacher_id]
+    );
     // Adiciona o caminho completo da imagem para cada usuário
     const users = result.rows.map(user => {
       user.photo_path = formatStudentPhotoUrl(user.photo_path, req);
